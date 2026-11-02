@@ -1,6 +1,6 @@
 // 카페 고양이들: 행동(방장 컴퓨터에서 계산) + 다른 손님 화면에는 위치 동기화
 import * as THREE from 'three';
-import { CatModel, ANIMS } from './catModel.js';
+import { CatModel } from './catModel.js';
 import { CONFIG } from './config.js';
 import { WORLD } from './room.js';
 import { pushOut, randomFloorPoint, route, isOutdoor } from './nav.js';
@@ -222,6 +222,7 @@ export class CatCafe {
     this.interrupt(cat);
     if (fromPos) cat.queue.push({ type: 'face', yaw: yawTo(cat.pos, fromPos) });
     cat.queue.push({ type: 'pose', anim: 'petted', dur: 4.5 });
+    this.emit(cat);
   }
 
   treat(id, fromPos, local = true) {
@@ -247,6 +248,7 @@ export class CatCafe {
     cat.queue.push({ type: 'pose', anim: 'eat', dur: 3.2 });
     cat.queue.push({ type: 'pose', anim: 'petted', dur: 2.5 });
     cat.queue.push({ type: 'pose', anim: 'sit', dur: 4 });
+    this.emit(cat);
   }
 
   interrupt(cat) {
@@ -283,8 +285,8 @@ export class CatCafe {
   // ---------------- 매 프레임 ----------------
   update(dt, t) {
     for (const cat of this.cats) {
-      if (this.isHost) this.simulate(cat, dt);
-      else this.follow(cat, dt);
+      // 계획(어디로 갈지)은 고양이 담당 브라우저만 세우고, 걷는 모습은 모두가 각자 그림
+      this.simulate(cat, dt);
       cat.model.root.position.copy(cat.pos);
       cat.model.root.rotation.y = cat.yaw;
       cat.model.setAnim(cat.anim);
@@ -299,7 +301,7 @@ export class CatCafe {
 
   simulate(cat, dt) {
     if (!cat.step) {
-      if (!cat.queue.length) this.plan(cat);
+      if (!cat.queue.length && this.isHost) { this.plan(cat); this.emit(cat); }
       cat.step = cat.queue.shift() || { type: 'pose', anim: 'idle', dur: 1 };
       cat.step.t = 0;
       // 실내 ↔ 정원은 문을 거쳐서
@@ -388,32 +390,52 @@ export class CatCafe {
     if (this.room.birdFeeder && cat.pos.distanceTo(this.room.birdFeeder) < 0.55) this.room.scareBirds?.();
   }
 
-  follow(cat, dt) {
-    const n = cat.net;
-    if (!n) return;
-    const before = cat.pos.clone();
-    const far = cat.pos.distanceTo(n.pos) > 2.5;
-    if (far) cat.pos.copy(n.pos);
-    else cat.pos.lerp(n.pos, 1 - Math.exp(-9 * dt));
-    cat.yaw = angDamp(cat.yaw, n.yaw, 9, dt);
-    cat.anim = n.anim;
-    cat.speed = n.anim === 'walk' ? before.distanceTo(cat.pos) / Math.max(dt, 1e-3) : 0;
+  // ---------------- 네트워크: 좌표 대신 "계획"만 주고받음 ----------------
+  // 고양이가 새 행동을 시작할 때만 한 번 보냄 → 고양이 5마리 합쳐 1분에 10번 남짓
+  emit(cat) { if (this.isHost) this.onPlan?.(this.planMsg(cat)); }
+
+  planMsg(cat) {
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const q = [];
+    for (const st of cat.queue) {
+      if (st.type === 'loc') continue; // 높은 곳 기록은 담당 브라우저만 필요
+      const o = { k: st.type };
+      if (st.to) o.to = [r2(st.to.x), r2(st.to.y), r2(st.to.z)];
+      if (st.anim) o.a = st.anim;
+      if (st.dur !== undefined && st.type === 'pose') o.d = Math.round(st.dur * 10) / 10;
+      if (st.yaw !== undefined && st.type === 'face') o.y = r2(st.yaw);
+      if (st.guest) o.g = st.guest;
+      const f = (st.keepYaw ? 1 : 0) | (st.low ? 2 : 0) | (st.fast ? 4 : 0) | (st.noCollide ? 8 : 0) | (st.routed ? 16 : 0);
+      if (f) o.f = f;
+      q.push(o);
+    }
+    return { i: cat.idx, p: [r2(cat.pos.x), r2(cat.pos.y), r2(cat.pos.z)], y: r2(cat.yaw), q };
   }
 
-  // ---------------- 네트워크 ----------------
-  snapshot() {
-    return this.cats.map((c) => [
-      +c.pos.x.toFixed(3), +c.pos.y.toFixed(3), +c.pos.z.toFixed(3), +c.yaw.toFixed(2), ANIMS.indexOf(c.anim),
-    ]);
+  applyPlan(m) {
+    const cat = this.cats[m.i];
+    if (!cat || !Array.isArray(m.q) || !Array.isArray(m.p)) return;
+    const p = V(+m.p[0] || 0, +m.p[1] || 0, +m.p[2] || 0);
+    // 조금 어긋난 건 그대로 두고, 많이 어긋났을 때만 맞춤
+    if (cat.pos.distanceTo(p) > 0.3) { cat.pos.copy(p); cat.yaw = +m.y || 0; }
+    cat.queue = m.q.slice(0, 40).map((o) => {
+      const st = { type: String(o.k) };
+      if (Array.isArray(o.to)) st.to = V(+o.to[0] || 0, +o.to[1] || 0, +o.to[2] || 0);
+      if (o.a) st.anim = String(o.a);
+      if (o.d !== undefined) st.dur = Math.min(120, +o.d || 1);
+      if (o.y !== undefined) st.yaw = +o.y || 0;
+      if (o.g) st.guest = String(o.g);
+      const f = +o.f || 0;
+      if (f & 1) st.keepYaw = true;
+      if (f & 2) st.low = true;
+      if (f & 4) st.fast = true;
+      if (f & 8) st.noCollide = true;
+      if (f & 16) st.routed = true;
+      return st;
+    }).filter((st) => ['walk', 'hop', 'face', 'faceGuest', 'pose'].includes(st.type) && (st.type === 'pose' || st.type === 'face' || st.type === 'faceGuest' || st.to));
+    cat.step = null;
   }
-  applySnapshot(arr) {
-    arr.forEach((a, i) => {
-      const cat = this.cats[i];
-      if (!cat) return;
-      if (!cat.net) { cat.net = { pos: V(a[0], a[1], a[2]) }; cat.pos.set(a[0], a[1], a[2]); }
-      cat.net.pos.set(a[0], a[1], a[2]);
-      cat.net.yaw = a[3];
-      cat.net.anim = ANIMS[a[4]] || 'idle';
-    });
-  }
+
+  // 새 손님이 들어오거나 담당이 바뀌었을 때 고양이 전체 계획
+  syncMsg() { return this.cats.map((c) => this.planMsg(c)); }
 }

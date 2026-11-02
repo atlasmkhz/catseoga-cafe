@@ -22,7 +22,9 @@ export class Net {
     this.attempt = 0;
   }
 
-  start() {
+  // room: 서버가 막혀 넘어올 때 같은 방 사람끼리 만나도록 방 이름을 넘겨받음
+  start(room) {
+    if (room) this.hostId = `${CONFIG.roomPrefix}-${String(room).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32)}`;
     if (!window.Peer) { this.h.onStatus?.('offline'); return; }
     this.tryHost();
   }
@@ -136,6 +138,7 @@ export class Net {
   }
 
   get count() { return this.isHost ? this.conns.size + 1 : null; }
+  get hasPeers() { return this.isHost ? this.conns.size > 0 : !!this.hostConn?.open; }
 
   cleanup() {
     clearInterval(this.watchdog);

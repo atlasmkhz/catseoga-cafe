@@ -1,7 +1,9 @@
 // 고양이서가 카페 방 서버
 // - 방(호점)마다 Durable Object 하나가 손님 목록과 메시지 전달을 맡습니다.
-// - 고양이 움직임은 방 안의 손님 한 명(가장 먼저 들어온 사람)의 브라우저가 계산하고,
-//   서버가 그 사람을 정해 주고 나머지에게 나눠 줍니다. 그 사람이 나가면 서버가 바로 다음 사람에게 넘깁니다.
+// - 고양이 움직임은 방 안의 손님 한 명(가장 먼저 들어온 사람)의 브라우저가 정하고,
+//   "어디로 간다 · 무엇을 한다"는 계획만 서버를 거쳐 나눠 줍니다. 걷는 모습은 각자 브라우저가 그립니다.
+// - 무료 플랜 절약: WebSocket Hibernation API를 써서, 메시지가 없을 땐 서버가 잠들고 실행시간이 쌓이지 않습니다.
+//   연결 유지용 'ping'에는 서버를 깨우지 않고 자동으로 'pong'이 나갑니다.
 // - 로비(Lobby)는 방마다 몇 명이 있는지 기억해 "빈 자리 있는 방"을 알려 줍니다.
 import { DurableObject } from 'cloudflare:workers';
 
@@ -84,8 +86,9 @@ const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, '').slice(0,
 export class CafeRoom extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this.cats = null;      // 마지막 고양이 상태 (메모리)
-    this.rate = new Map(); // 도배 방지
+    this.rate = new Map(); // 도배 방지 (잠들면 비워져도 괜찮음)
+    // 'ping' → 'pong' 은 서버를 깨우지 않고 자동 응답
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
   sockets() { return this.ctx.getWebSockets().filter((w) => w.readyState === 1); }
@@ -114,11 +117,11 @@ export class CafeRoom extends DurableObject {
 
   async webSocketMessage(ws, data) {
     if (typeof data !== 'string' || data.length > MAX_MSG) return;
-    // 1초에 40개 넘게 보내면 무시
+    // 1초에 20개 넘게 보내면 무시
     const now = Date.now();
     const r = this.rate.get(ws) || { t: now, c: 0 };
     if (now - r.t > 1000) { r.t = now; r.c = 0; }
-    if (++r.c > 40) { this.rate.set(ws, r); return; }
+    if (++r.c > 20) { this.rate.set(ws, r); return; }
     this.rate.set(ws, r);
 
     let m;
@@ -136,7 +139,7 @@ export class CafeRoom extends DurableObject {
       att.hi = this.hiOf(m, att.uid);
       ws.serializeAttachment(att);
       const members = this.sockets().filter((w) => w !== ws).map((w) => w.deserializeAttachment()).filter((a) => a && a.uid && a.uid !== att.uid);
-      this.send(ws, { t: 'welcome', room: att.n, members: members.map((a) => ({ hi: a.hi, st: a.st })), cats: this.cats });
+      this.send(ws, { t: 'welcome', room: att.n, members: members.map((a) => ({ hi: a.hi, st: a.st })) });
       this.broadcast(att.hi, ws);
       this.ensureHost();
       await this.report(att.n);
@@ -152,14 +155,15 @@ export class CafeRoom extends DurableObject {
         this.broadcast(att.hi, ws);
         break;
       case 'st':
-        att.st = { t: 'st', uid: att.uid, p: m.p, s: m.s, c: m.c, h: m.h };
+        // p: 지금 위치, g: 걸어갈 목적지(있으면 받는 쪽이 알아서 걸어감), s: 앉은 자리
+        att.st = { t: 'st', uid: att.uid, p: m.p, s: m.s, g: m.g };
         ws.serializeAttachment(att);
         this.broadcast(att.st, ws);
         break;
-      case 'cats':
+      case 'cq': case 'cs':
+        // 고양이 계획: 고양이 담당 손님만 보낼 수 있음
         if (!att.host) return;
-        this.cats = m.c;
-        this.broadcast({ t: 'cats', c: m.c }, ws);
+        this.broadcast(m, ws);
         break;
       case 'pet': case 'treat': case 'wave': case 'fx':
         this.broadcast(m, ws);
@@ -205,7 +209,6 @@ export class CafeRoom extends DurableObject {
 
   async report(n) {
     const count = this.sockets().filter((w) => { const a = w.deserializeAttachment(); return a && a.uid && !a.left; }).length;
-    if (!count) this.cats = null;
     try { await this.env.LOBBY.get(this.env.LOBBY.idFromName('lobby')).report(n, count); } catch { /* 무시 */ }
   }
 }

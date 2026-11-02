@@ -205,6 +205,8 @@ function walkTo(p, pending = null) {
   me.target = wps.shift();
   me.route = wps;
   me.pending = pending;
+  // 목적지만 한 번 보내면 다른 손님 화면에서 알아서 걸어감
+  sendState(true, goal);
 }
 function seatTakenByOther(seat) {
   const idx = room.seats.indexOf(seat);
@@ -257,6 +259,12 @@ function updateMe(dt) {
   }
   if (!me.seat) pushOut(room, me.pos, 0.24);
   me.speed = moving ? 1.8 : 0;
+  // 키보드 · 꾹 누르기로 움직일 땐 1초에 3번까지만 위치를 보냄, 멈추면 한 번
+  const manual = moving && !me.target;
+  const nowMs = performance.now();
+  if (manual && nowMs - (me.lastManualSend || 0) > 333) { me.lastManualSend = nowMs; sendState(); }
+  if (!manual && me.wasManual) sendState(true);
+  me.wasManual = manual;
 
   const a = me.avatar;
   if (me.seat) {
@@ -273,15 +281,17 @@ function updateMe(dt) {
 function arrive() {
   const p = me.pending;
   me.pending = null;
-  if (!p) return;
+  if (!p) { sendState(true); return; }
   if (p.type === 'seat') {
     if (seatTakenByOther(p.seat)) { ui.toast('누군가 앉아 있어요'); return; }
     me.seat = p.seat;
     p.seat.taken = uid;
+    sendState(true);
   } else if (p.type === 'faceCat') {
     const c = cafe.find(p.id);
     if (c) me.yaw = Math.atan2(c.pos.x - me.pos.x, c.pos.z - me.pos.z);
-  }
+    sendState(true);
+  } else sendState(true);
 }
 
 function dampAngle(a, b, k, dt) {
@@ -428,11 +438,14 @@ function floorAt(x, y) {
 // ---------- 네트워크 ----------
 // config.js 에 serverUrl 이 있으면 Cloudflare 방 서버(방마다 50명), 없으면 PeerJS P2P
 const SERVER = !!CONFIG.serverUrl;
+let usingServer = SERVER;
 const netHandlers = {
   onHost: (host) => {
-    if (host && !cafe.isHost) cafe.adopt();
-    cafe.isHost = host;
+    // 실제 전환은 그리기 반복에서 한 가지 규칙으로 처리 (아래 frame 참고)
+    if (host) sendCatSync();
   },
+  // 서버가 무료 한도를 넘었거나 막히면 P2P로 이어서 머물기
+  onServerDown: () => switchToP2P(),
   onFull: () => {
     ui.toast('이 방이 가득 찼어요. 다른 방을 골라 주세요');
     ui.reopenEntry();
@@ -441,29 +454,48 @@ const netHandlers = {
   onHostLost: () => { /* 방장이 나가면 잠시 고양이를 마지막 위치에 둠 */ },
   onStatus: (s) => ui.setStatus(s),
   onClientOpen: (send) => {
-    send({ t: 'cats', c: cafe.snapshot(), uid });
     send(helloMsg());
+    send({ t: 'cs', c: cafe.syncMsg(), uid });
   },
   onConnected: () => { net.send(helloMsg()); sendState(true); },
   onMessage: (m) => handle(m),
 };
 // 서버 모드에선 서버가 방장(고양이 계산 담당)을 정해 줌. 처음엔 혼자라고 보고 내가 계산
-const net = SERVER ? new NetServer(uid, netHandlers) : new Net(uid, netHandlers);
+let net = SERVER ? new NetServer(uid, netHandlers) : new Net(uid, netHandlers);
+
+function switchToP2P() {
+  if (!usingServer) return;
+  usingServer = false;
+  try { net.stop?.(); } catch { /* 무시 */ }
+  for (const id of [...remotes.keys()]) dropRemote(id);
+  net = new Net(uid, netHandlers);
+  if (me.entered) net.start(me.roomNo ? `s${me.roomNo}` : undefined);
+  ui.toast('서버가 붐벼서 손님끼리 직접 연결하는 방식으로 이어서 머물러요');
+}
+
+// 고양이 계획 보내기 (고양이 담당일 때, 다른 손님이 있을 때만)
+cafe.onPlan = (msg) => { if (remotes.size) net.send({ t: 'cq', ...msg }); };
+let syncTimer = null;
+function sendCatSync() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { if (cafe.isHost && remotes.size) net.send({ t: 'cs', c: cafe.syncMsg() }); }, 400);
+}
 
 function helloMsg() {
   return { t: 'hi', n: me.name, l: me.look, mc: me.myCatInfo ? { ...me.myCatInfo, swatches: undefined } : null, uid };
 }
-let lastSent = '', lastSentT = 0;
-function sendState(force = false) {
+// 내 상태: p 지금 위치, s 앉은 자리, g 걸어갈 목적지
+// 움직이기 시작할 때 · 멈출 때 · 앉을 때만 보냄 (가만히 있으면 0번)
+let lastSent = '';
+function sendState(force = false, goal = null) {
   if (!me.entered) return;
   const st = [+me.pos.x.toFixed(2), +me.pos.z.toFixed(2), +me.yaw.toFixed(2)];
   const seatIdx = me.seat ? room.seats.indexOf(me.seat) : -1;
-  const c = me.myCat ? me.myCat.state() : null;
-  const key = JSON.stringify([st, seatIdx, c]);
-  const now = performance.now();
-  if (!force && key === lastSent && (SERVER || now - lastSentT < 2000)) return;
-  lastSent = key; lastSentT = now;
-  net.send({ t: 'st', p: st, s: seatIdx, c });
+  const g = goal ? [+goal.x.toFixed(2), +goal.z.toFixed(2)] : null;
+  const key = JSON.stringify([st, seatIdx, g]);
+  if (!force && key === lastSent) return;
+  lastSent = key;
+  net.send({ t: 'st', p: st, s: seatIdx, g });
 }
 
 function getRemote(id) {
@@ -471,9 +503,11 @@ function getRemote(id) {
   if (!r) {
     const avatar = new Avatar('손님', {});
     scene.add(avatar.root);
-    r = { avatar, name: '손님', pos: new THREE.Vector3(2.45, 0, 4.2), yaw: Math.PI, tpos: new THREE.Vector3(2.45, 0, 4.2), tyaw: Math.PI, seat: -1, last: performance.now(), cat: null, catKey: '', lookKey: '' };
+    r = { avatar, name: '손님', pos: room.spawn.clone(), yaw: Math.PI, tpos: room.spawn.clone(), tyaw: Math.PI, seat: -1, path: null, last: performance.now(), cat: null, catKey: '', lookKey: '' };
     remotes.set(id, r);
     ui.setCount(remotes.size + 1);
+    // 새 손님에게 고양이들이 지금 뭘 하는지 알려 줌
+    if (cafe.isHost) sendCatSync();
   }
   r.last = performance.now();
   return r;
@@ -490,9 +524,16 @@ function dropRemote(id) {
 function handle(m) {
   if (!m || !m.t || m.uid === uid) return;
   switch (m.t) {
-    case 'cats':
-      if (!cafe.isHost) cafe.applySnapshot(m.c);
+    case 'cq':
+    case 'cs': {
+      // 고양이 계획을 보낸 사람이 있다는 건 내가 담당이 아니라는 뜻
+      if (net.isHost) break;
+      getRemote(m.uid);
+      cafe.isHost = false;
+      if (m.t === 'cq') cafe.applyPlan(m);
+      else if (Array.isArray(m.c)) m.c.forEach((x) => cafe.applyPlan(x));
       break;
+    }
     case 'hi': {
       const r = getRemote(m.uid);
       const name = String(m.n || '손님').slice(0, 12);
@@ -515,9 +556,21 @@ function handle(m) {
     }
     case 'st': {
       const r = getRemote(m.uid);
-      if (Array.isArray(m.p)) { r.tpos.set(+m.p[0] || 0, 0, +m.p[1] || 0); r.tyaw = +m.p[2] || 0; }
+      if (Array.isArray(m.p)) {
+        const p = new THREE.Vector3(+m.p[0] || 0, 0, +m.p[1] || 0);
+        r.tyaw = +m.p[2] || 0;
+        if (Array.isArray(m.g)) {
+          // 목적지를 받으면 내 화면에서 직접 걸려 보냄
+          if (r.pos.distanceTo(p) > 1.2) r.pos.copy(p);
+          const goal = new THREE.Vector3(+m.g[0] || 0, 0, +m.g[1] || 0);
+          r.path = route(r.pos, goal);
+          r.tpos.copy(goal);
+        } else {
+          r.path = null;
+          r.tpos.copy(p);
+        }
+      }
       r.seat = Number.isInteger(m.s) ? m.s : -1;
-      if (r.cat && Array.isArray(m.c)) r.cat.setState(m.c);
       break;
     }
     case 'pet': {
@@ -555,18 +608,32 @@ function sanitizeCat(c = {}) {
 function updateRemotes(dt) {
   const now = performance.now();
   for (const [id, r] of remotes) {
-    if (now - r.last > 20000) { dropRemote(id); continue; }
+    // P2P에선 주기적으로 인사가 오므로 오래 소식 없으면 정리 (서버 모드는 서버가 나감을 알려 줌)
+    if (!usingServer && now - r.last > 20000) { dropRemote(id); continue; }
     const before = r.pos.clone();
-    if (r.pos.distanceTo(r.tpos) > 4) r.pos.copy(r.tpos);
-    r.pos.lerp(r.tpos, 1 - Math.exp(-8 * dt));
-    r.yaw = dampAngle(r.yaw, r.tyaw, 10, dt);
+    if (r.path && r.path.length) {
+      const tgt = r.path[0];
+      const d = tgt.clone().sub(r.pos).setY(0);
+      const dist = d.length();
+      if (dist < 0.08) r.path.shift();
+      else {
+        r.pos.addScaledVector(d.normalize(), Math.min(dist, 1.8 * dt));
+        pushOut(room, r.pos, 0.24);
+        r.yaw = dampAngle(r.yaw, Math.atan2(d.x, d.z), 12, dt);
+      }
+    } else {
+      if (r.pos.distanceTo(r.tpos) > 4) r.pos.copy(r.tpos);
+      r.pos.lerp(r.tpos, 1 - Math.exp(-8 * dt));
+      if (r.pos.distanceTo(r.tpos) < 0.05) r.yaw = dampAngle(r.yaw, r.tyaw, 10, dt);
+      else r.yaw = dampAngle(r.yaw, Math.atan2(r.tpos.x - r.pos.x, r.tpos.z - r.pos.z), 10, dt);
+    }
     const seat = room.seats[r.seat];
     const speed = before.distanceTo(r.pos) / Math.max(dt, 1e-3);
     r.avatar.root.position.copy(r.pos);
     r.avatar.root.position.y = seat ? (seat.pos.y - 0.38) * r.avatar.sitting : 0;
     r.avatar.root.rotation.y = r.yaw;
     r.avatar.update(dt, speed > 0.2 ? speed : 0, !!seat);
-    r.cat?.follow(dt);
+    r.cat?.simulate(dt, r.pos, r.yaw);
   }
 }
 
@@ -580,17 +647,17 @@ ui.onEnter = async ({ name, look, soundOn, room: roomChoice }) => {
   me.entered = true;
   if (soundOn) { sound.setEnabled(true); sound.setNight(dayNight.target); ui.setSound(true); }
   if (me.myCatInfo && !me.myCat) spawnMyCat(me.myCatInfo, false);
-  if (SERVER) {
+  if (usingServer) {
     let n = roomChoice;
+    let ok = true;
     if (!n) {
-      try { const info = await fetchRooms(); n = info.best || 1; } catch { n = 1; }
+      try { const info = await fetchRooms(); n = info.best || 1; } catch { ok = false; n = 1; }
     }
     me.roomNo = n;
     ui.setRoom(n);
-    net.stopped = false;
-    net.start(n);
+    if (ok) { net.stopped = false; net.failures = 0; net.start(n); } else switchToP2P();
   } else {
-    net.start();
+    net.start(me.roomNo ? `s${me.roomNo}` : undefined);
   }
   ui.showHint(IS_MOBILE
     ? ['톡 누르면 걸어가요', '끌어서 둘러보고, 두 손가락으로 크게 · 작게', '고양이를 눌러 쓰다듬어 보세요']
@@ -666,13 +733,15 @@ ui.onPetBubble = (id) => petCat(id);
 window.addEventListener('pagehide', () => { try { net.send({ t: 'bye' }); } catch { /* 무시 */ } });
 
 // ---------- 네트워크 보내기 (화면이 뒤로 가도 계속 되도록 타이머 사용) ----------
+// 서버 모드: 주기적으로 보내는 것 없음 (서버가 손님 상태를 기억함)
+// P2P 모드: 방장이 따로 기억해 주지 않으므로 2~3초마다 짧은 안부만
 let tick = 0;
 setInterval(() => {
   tick++;
-  sendState();
-  if (cafe.isHost && net.isHost && remotes.size && tick % 2 === 0) net.send({ t: 'cats', c: cafe.snapshot() });
-  if (!SERVER && tick % 25 === 0 && me.entered) net.send(helloMsg());
-}, 120);
+  if (usingServer || !me.entered) return;
+  if (tick % 2 === 0) sendState(true);
+  if (tick % 3 === 0) net.send(helloMsg());
+}, 1000);
 
 // ---------- 그리기 반복 ----------
 const clock = new THREE.Clock();
@@ -681,6 +750,13 @@ function frame() {
   const t = clock.elapsedTime;
   updateDayNight(dt, t);
   updateMe(dt);
+  // 고양이 담당: 혼자 있으면(연결 중 · 끊김 포함) 나, 다른 손님이 있으면 연결이 정해 준 사람
+  const shouldHost = remotes.size === 0 || net.isHost;
+  if (shouldHost !== cafe.isHost) {
+    if (shouldHost) cafe.adopt();
+    cafe.isHost = shouldHost;
+    if (shouldHost) sendCatSync();
+  }
   cafe.update(dt, t);
   updateRemotes(dt);
   fx.update(dt);
@@ -702,4 +778,4 @@ function frame() {
 requestAnimationFrame(frame);
 
 // 디버그용 (콘솔에서 window.cafe 로 확인)
-window.cafe = { scene, camera, cafe, room, me, net, cam, dayNight, onTap };
+window.cafe = { scene, camera, cafe, room, me, get net() { return net; }, cam, dayNight, onTap, remotes, switchToP2P, walkTo };
