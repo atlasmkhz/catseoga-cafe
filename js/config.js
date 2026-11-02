@@ -9,7 +9,7 @@ export const CONFIG = {
 
   // Cloudflare 방 서버 주소 (예: 'https://catseoga-cafe.내아이디.workers.dev')
   // 비워 두면 예전처럼 PeerJS(P2P)로 동작합니다 (방당 20명 안팎).
-  serverUrl: new URLSearchParams(location.search).get('server') || '',
+  serverUrl: new URLSearchParams(location.search).get('server') || 'https://catseoga-cafe.hyosoonpark2477.workers.dev',
 
   // 배경 음악: audio/ 폴더에 파일을 넣으면 낮 · 밤에 따라 자연스럽게 바뀝니다.
   // 파일이 없으면 음악 없이 조용히 넘어갑니다.
