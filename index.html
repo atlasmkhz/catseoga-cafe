@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>고양이서가 카페</title>
+  <meta name="description" content="고양이서가 원목 캣타워가 있는 온라인 고양이 카페. 말없이 함께 머물러요." />
+  <meta name="theme-color" content="#efe2cd" />
+  <meta property="og:title" content="고양이서가 카페" />
+  <meta property="og:description" content="고양이들이 캣타워를 오르내리는 작은 원목 카페에 들러 쉬어 가세요." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐈%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Jua&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    { "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/"
+    } }
+  </script>
+  <script src="vendor/peerjs/peerjs.min.js" defer></script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <!-- 입장 -->
+  <div id="entry">
+    <form id="enterForm" class="panel" autocomplete="off">
+      <div class="logo">고양이서가 <span>카페</span></div>
+      <p class="sub">원목 캣타워 사이로 고양이들이 오가는 작은 방.<br />말없이 머물다 가셔도 괜찮아요.</p>
+      <label class="field">
+        <span>닉네임</span>
+        <input id="nameInput" maxlength="12" placeholder="카페에서 쓸 이름" enterkeyhint="go" />
+      </label>
+      <div class="field"><span>옷</span><div id="topSwatches" class="swatches"></div></div>
+      <div class="field"><span>머리</span><div id="hairSwatches" class="swatches"></div></div>
+      <div class="field"><span>피부</span><div id="skinSwatches" class="swatches"></div></div>
+      <label class="check"><input type="checkbox" id="soundOnEnter" checked /> 빗소리 · 장작 소리와 함께</label>
+      <button class="btn primary big" type="submit">카페 들어가기</button>
+      <p class="tiny">가입 없이 닉네임만 · 같은 시간에 온 손님들과 함께 보여요</p>
+    </form>
+  </div>
+
+  <!-- 화면 위 UI -->
+  <div id="hud" class="hidden">
+    <div class="topbar">
+      <div class="chip brand"><b>고양이서가</b><i id="statusDot" class="dot"></i><span id="count">혼자 머무는 중</span></div>
+      <div class="buttons">
+        <button id="btnMyCat" class="round" title="우리 집 고양이 입장시키기" type="button">🐾</button>
+        <button id="btnWave" class="round" title="손 흔들기" type="button">👋</button>
+        <button id="btnNight" class="round" title="낮 · 밤" type="button">☀️</button>
+        <button id="btnSound" class="round off" title="소리 켜기" type="button">🔈</button>
+      </div>
+    </div>
+    <div id="hint" class="hint"></div>
+    <div id="card" class="card">
+      <button id="cardClose" class="x" type="button" aria-label="닫기">×</button>
+      <div id="cardBody"></div>
+    </div>
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <!-- 우리 집 고양이 입장시키기 -->
+  <div id="myCatSheet" class="sheet-wrap hidden">
+    <div class="panel sheet">
+      <button id="myCatClose" class="x" type="button" aria-label="닫기">×</button>
+      <div class="card-kicker">우리 집 고양이 입장시키기</div>
+      <p class="sub">고양이 사진을 올리면 털색을 따서<br />카페에 함께 들어와요. 사진은 내 기기 안에서만 쓰여요.</p>
+      <div id="currentCat" class="current hidden">지금 함께 있는 고양이: <b id="currentCatName"></b>
+        <button id="sendHomeBtn" class="btn ghost" type="button">집으로 보내기</button>
+      </div>
+      <label class="btn upload">📷 사진 고르기<input id="photoInput" type="file" accept="image/*" hidden /></label>
+      <div id="photoStatus" class="tiny"></div>
+      <div id="myCatPreview" class="hidden">
+        <div class="preview-row"><div id="catSwatches" class="swatches"></div><span id="catKind" class="kind"></span></div>
+        <label class="field"><span>이름</span><input id="catNameInput" maxlength="10" placeholder="고양이 이름" /></label>
+        <button id="adoptBtn" class="btn primary" type="button">카페에 들여보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <noscript>이 카페는 자바스크립트가 필요해요.</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
