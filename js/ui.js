@@ -5,8 +5,17 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export class UI {
-  init({ name, look, night }) {
+  init({ name, look, night, server, rain }) {
     this.look = { ...look };
+    this.server = server;
+    if (server) { $('#roomField').classList.remove('hidden'); this.refreshRooms(); }
+    this.setRain(rain);
+    $('#btnRain').addEventListener('click', () => {
+      const on = this.onToggleRain?.();
+      this.setRain(on);
+      this.toast(on ? '☔ 비가 내려요' : '☀️ 비가 그쳤어요');
+    });
+    $('#petBubble').addEventListener('click', () => { if (this.bubbleId) this.onPetBubble?.(this.bubbleId); });
     // 입장 카드
     $('#nameInput').value = name || '';
     this.swatches('#topSwatches', LOOKS.tops, 'top');
@@ -18,7 +27,7 @@ export class UI {
       if (!n) { $('#nameInput').focus(); $('#nameInput').classList.add('shake'); setTimeout(() => $('#nameInput').classList.remove('shake'), 400); return; }
       $('#entry').classList.add('gone');
       $('#hud').classList.remove('hidden');
-      this.onEnter?.({ name: n, look: this.look, soundOn: $('#soundOnEnter').checked });
+      this.onEnter?.({ name: n, look: this.look, soundOn: $('#soundOnEnter').checked, room: +$('#roomSelect').value || null });
     });
     // 위쪽 버튼
     this.setNight(night);
@@ -57,6 +66,55 @@ export class UI {
       box.appendChild(b);
     });
     if (!colors.includes(this.look[key])) { this.look[key] = colors[0]; box.firstChild.classList.add('on'); }
+  }
+
+  async refreshRooms() {
+    if (!this.loadRooms) return;
+    const sel = $('#roomSelect');
+    try {
+      const info = await this.loadRooms();
+      const keep = sel.value;
+      sel.innerHTML = '';
+      const auto = document.createElement('option');
+      auto.value = '';
+      auto.textContent = info.best ? `빈자리 있는 방으로 (${info.best}호점)` : '빈자리 있는 방으로';
+      sel.appendChild(auto);
+      for (const r of info.rooms) {
+        const o = document.createElement('option');
+        o.value = r.n;
+        const full = r.count >= info.cap;
+        o.textContent = `${r.n}호점 · ${r.count}/${info.cap}명${full ? ' (가득)' : ''}`;
+        o.disabled = full;
+        sel.appendChild(o);
+      }
+      sel.value = keep;
+    } catch (e) {
+      console.warn('방 목록을 못 불러왔어요', e);
+    }
+  }
+
+  reopenEntry() {
+    $('#hud').classList.add('hidden');
+    $('#entry').classList.remove('gone');
+    this.refreshRooms();
+  }
+
+  setRoom(n) { $('#roomNo').textContent = n ? `${n}호점` : ''; }
+
+  setRain(on) {
+    $('#btnRain').classList.toggle('off', !on);
+    $('#btnRain').title = on ? '비 그치게 하기' : '비 오는 날';
+  }
+
+  petBubble(info) {
+    const el = $('#petBubble');
+    const hide = !info || $('#card').classList.contains('show') && this.cardCat === info.id;
+    if (hide) { el.classList.remove('show'); this.bubbleId = null; return; }
+    this.bubbleId = info.id;
+    el.style.left = info.x + 'px';
+    el.style.top = info.y + 'px';
+    el.querySelector('span').textContent = `${info.name} 쓰다듬기`;
+    el.classList.add('show');
   }
 
   setNight(on) {
@@ -107,6 +165,7 @@ export class UI {
   }
 
   showProduct(p) {
+    this.cardCat = null;
     $('#cardBody').innerHTML = `
       <div class="card-kicker">고양이서가 원목 가구</div>
       <div class="card-title">${esc(p.name)}</div>
@@ -116,6 +175,7 @@ export class UI {
   }
 
   showCat(def, onTreat) {
+    this.cardCat = def.id;
     $('#cardBody').innerHTML = `
       <div class="card-kicker">카페 고양이</div>
       <div class="card-title">${esc(def.name)} <span class="purr">골골…</span></div>

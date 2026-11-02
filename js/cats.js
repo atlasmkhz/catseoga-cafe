@@ -2,8 +2,8 @@
 import * as THREE from 'three';
 import { CatModel, ANIMS } from './catModel.js';
 import { CONFIG } from './config.js';
-import { ROOM } from './room.js';
-import { pushOut, randomFloorPoint } from './nav.js';
+import { WORLD } from './room.js';
+import { pushOut, randomFloorPoint, route, isOutdoor } from './nav.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -16,11 +16,11 @@ const yawTo = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
 
 // 고양이 성격: 행동 가중치
 const TRAITS = {
-  cheese:   { climb: 1, box: 0.6, spot: 1, wander: 1.2, guest: 2.2, stretch: 0.8, stove: 0.8, sun: 1 },
-  calico:   { climb: 0.8, box: 0.8, spot: 1.6, wander: 0.8, guest: 1.2, stretch: 0.7, stove: 1.2, sun: 1.4 },
-  mackerel: { climb: 2.4, box: 0.5, spot: 0.6, wander: 1, guest: 0.8, stretch: 0.8, stove: 0.6, sun: 0.8 },
-  tuxedo:   { climb: 1.2, box: 0.6, spot: 1, wander: 1.4, guest: 1.6, stretch: 1, stove: 0.8, sun: 0.8 },
-  black:    { climb: 1, box: 2.4, spot: 0.8, wander: 0.7, guest: 1, stretch: 0.7, stove: 1, sun: 0.4 },
+  cheese:   { climb: 1, box: 0.6, spot: 1, wander: 1.2, guest: 2.2, stretch: 0.8, stove: 0.8, sun: 1, garden: 1.0, birds: 0.6 },
+  calico:   { climb: 0.8, box: 0.8, spot: 1.6, wander: 0.8, guest: 1.2, stretch: 0.7, stove: 1.2, sun: 1.4, garden: 1.2, birds: 0.5 },
+  mackerel: { climb: 2.4, box: 0.5, spot: 0.6, wander: 1, guest: 0.8, stretch: 0.8, stove: 0.6, sun: 0.8, garden: 0.8, birds: 1.4 },
+  tuxedo:   { climb: 1.2, box: 0.6, spot: 1, wander: 1.4, guest: 1.6, stretch: 1, stove: 0.8, sun: 0.8, garden: 1.4, birds: 1.0 },
+  black:    { climb: 1, box: 2.4, spot: 0.8, wander: 0.7, guest: 1, stretch: 0.7, stove: 1, sun: 0.4, garden: 0.6, birds: 0.8 },
 };
 
 export class CatCafe {
@@ -34,10 +34,10 @@ export class CatCafe {
     this.reserved = new Set();
     this.getGuests = () => [];
     this.night = 0;
-    const starts = [V(-0.8, 0, 1.2), V(1.6, 0, -2.6), V(-3.6, 0, -1.4), V(3.2, 0, 2.6), V(0.4, 0, 3.0)];
+    const starts = [V(-1.2, 0, 2.2), V(2.0, 0, -0.8), V(-5.6, 0, -0.6), V(3.4, 0, 1.2), V(1.6, 0, 2.6)];
     CONFIG.cats.forEach((def, i) => {
-      const model = new CatModel(def.pattern, null, i + 1, 1.12);
-      const hit = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
+      const model = new CatModel(def.pattern, null, i + 1, 1.32);
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(0.36, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
       hit.position.y = 0.25;
       hit.userData.catId = def.id;
       model.root.add(hit);
@@ -72,14 +72,29 @@ export class CatCafe {
       ['guest', guests.length ? t.guest : 0],
       ['stove', t.stove * (0.4 + this.night * 1.5)],
       ['sun', t.sun * (1 - this.night)],
+      ['garden', t.garden * (this.rain ? 0.05 : 1 - this.night * 0.7)],
+      ['birds', this.birdsPresent?.() ? t.birds : 0],
     ];
     const sum = choices.reduce((s, c) => s + c[1], 0);
     let r = Math.random() * sum, choice = 'wander';
     for (const [k, w] of choices) { if ((r -= w) <= 0) { choice = k; break; } }
 
     if (choice === 'wander') {
-      q.push({ type: 'walk', to: randomFloorPoint(this.room, 0.2) });
+      q.push({ type: 'walk', to: randomFloorPoint(this.room, 0.2, this.night > 0.5 || this.rain ? 'in' : undefined) });
       q.push({ type: 'pose', anim: pick(['sit', 'idle', 'groom', 'sit']), dur: rand(3, 7) });
+    } else if (choice === 'garden') {
+      const spots = this.room.gardenSpots;
+      const to = spots.length && Math.random() < 0.5 ? pick(spots).clone() : randomFloorPoint(this.room, 0.2, 'out');
+      q.push({ type: 'walk', to });
+      q.push({ type: 'pose', anim: pick(['sit', 'loaf', 'groom', 'loaf', 'stretch']), dur: rand(8, 20) });
+    } else if (choice === 'birds') {
+      // 새 모이대를 바라보며 꼬리를 흔듦 (채터링 소리는 다음 단계)
+      const f = this.room.birdFeeder;
+      const to = f.clone().add(V(rand(-1.2, -0.7), 0, rand(0.6, 1.2)));
+      pushOut(this.room, to, 0.15);
+      q.push({ type: 'walk', to });
+      q.push({ type: 'face', yaw: yawTo(to, f) });
+      q.push({ type: 'pose', anim: 'sit', dur: rand(6, 12), watch: true });
     } else if (choice === 'stretch') {
       q.push({ type: 'pose', anim: 'stretch', dur: 2.6 });
       q.push({ type: 'pose', anim: 'idle', dur: 0.8 });
@@ -108,7 +123,7 @@ export class CatCafe {
       q.push({ type: 'pose', anim: pick(['loaf', 'sleep', 'sit', 'loaf', 'groom']), dur: rand(10, 26) });
       q.push({ type: 'loc', loc: { kind: 'path', p, index: target, key } });
     } else if (choice === 'box') {
-      const boxes = this.room.products.flatMap((p) => p.boxes.map((b, i) => ({ b, key: `${p.key}:box${i}` })));
+      const boxes = this.room.boxes.filter((b) => !(b.outdoor && (this.rain || this.night > 0.5))).map((b) => ({ b, key: b.key }));
       const free = boxes.filter((x) => !this.reserved.has(x.key));
       if (!free.length) return this.plan_wander(cat);
       const { b, key } = pick(free);
@@ -256,8 +271,8 @@ export class CatCafe {
       let best = null, bd = 0.35;
       for (const p of this.room.products) {
         p.path.forEach((pt, i) => { const d = pt.distanceTo(cat.pos); if (d < bd && pt.y > 0.05) { bd = d; best = { kind: 'path', p, index: i, key: `${p.key}:${i}` }; } });
-        p.boxes.forEach((b, i) => { const d = b.inside.distanceTo(cat.pos); if (d < bd) { bd = d; best = { kind: 'box', b, key: `${p.key}:box${i}` }; } });
       }
+      this.room.boxes.forEach((b) => { const d = b.inside.distanceTo(cat.pos); if (d < bd) { bd = d; best = { kind: 'box', b, key: b.key }; } });
       this.room.benchSpots.forEach((s, i) => { const d = s.distanceTo(cat.pos); if (d < bd) { bd = d; best = { kind: 'spot', s, floorPt: this.floorNear(s), key: `spot${i}` }; } });
       cat.loc = best || { kind: 'air' };
       if (best?.key) this.reserved.add(best.key);
@@ -287,6 +302,13 @@ export class CatCafe {
       if (!cat.queue.length) this.plan(cat);
       cat.step = cat.queue.shift() || { type: 'pose', anim: 'idle', dur: 1 };
       cat.step.t = 0;
+      // 실내 ↔ 정원은 문을 거쳐서
+      if (cat.step.type === 'walk' && !cat.step.routed && isOutdoor(cat.pos) !== isOutdoor(cat.step.to)) {
+        const wps = route(cat.pos, cat.step.to);
+        const last = { ...cat.step, routed: true };
+        cat.queue.unshift(...wps.slice(1, -1).map((w) => ({ type: 'walk', to: w, routed: true, noCollide: false })), last);
+        cat.step = { type: 'walk', to: wps[0], routed: true, t: 0 };
+      }
       if (cat.step.type === 'hop') {
         cat.step.from = cat.pos.clone();
         const d = cat.step.from.distanceTo(cat.step.to);
@@ -359,9 +381,11 @@ export class CatCafe {
         if (Math.abs(rel) < 1.2 && cat.pos.distanceTo(g.pos) < 3) cat.model.lookYaw = rel * 0.6;
       }
     }
-    // 방 밖으로 나가지 않게
-    cat.pos.x = THREE.MathUtils.clamp(cat.pos.x, ROOM.minX + 0.15, ROOM.maxX - 0.15);
-    cat.pos.z = THREE.MathUtils.clamp(cat.pos.z, ROOM.minZ + 0.15, ROOM.maxZ - 0.15);
+    // 판 밖으로 나가지 않게
+    cat.pos.x = THREE.MathUtils.clamp(cat.pos.x, WORLD.minX + 0.15, WORLD.maxX - 0.15);
+    cat.pos.z = THREE.MathUtils.clamp(cat.pos.z, WORLD.minZ + 0.15, WORLD.maxZ - 0.15);
+    // 새 모이대 가까이 다가가면 새가 날아감
+    if (this.room.birdFeeder && cat.pos.distanceTo(this.room.birdFeeder) < 0.55) this.room.scareBirds?.();
   }
 
   follow(cat, dt) {

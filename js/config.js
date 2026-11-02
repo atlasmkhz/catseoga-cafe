@@ -7,6 +7,18 @@ export const CONFIG = {
   // 같은 room 이름으로 들어온 사람끼리 만납니다. 주소 뒤에 ?room=이름 을 붙이면 다른 방.
   roomPrefix: 'catseoga-cafe-v1',
 
+  // Cloudflare 방 서버 주소 (예: 'https://catseoga-cafe.내아이디.workers.dev')
+  // 비워 두면 예전처럼 PeerJS(P2P)로 동작합니다 (방당 20명 안팎).
+  serverUrl: new URLSearchParams(location.search).get('server') || '',
+
+  // 배경 음악: audio/ 폴더에 파일을 넣으면 낮 · 밤에 따라 자연스럽게 바뀝니다.
+  // 파일이 없으면 음악 없이 조용히 넘어갑니다.
+  music: {
+    day: 'audio/bgm-day.mp3',
+    night: 'audio/bgm-night.mp3',
+    volume: 0.35,
+  },
+
   // ---------------------------------------------------------
   // 가구 = 실제 제품
   //   glb: null 이면 코드로 만든 기본 모델을 씁니다.

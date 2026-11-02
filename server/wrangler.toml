@@ -1,0 +1,24 @@
+# 고양이서가 카페 방 서버 (Cloudflare Workers + Durable Objects)
+name = "catseoga-cafe"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+# 방 하나에 들어갈 수 있는 최대 인원
+ROOM_CAP = "50"
+# 만들 수 있는 방 개수 (반응을 보며 늘리세요. 100이면 최대 5,000명)
+MAX_ROOMS = "20"
+# 접속을 허용할 사이트 주소 (쉼표로 여러 개)
+ALLOWED_ORIGINS = "https://atlasmkhz.github.io,http://localhost:8765,http://127.0.0.1:8765,http://localhost:8000"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "CafeRoom"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CafeRoom", "Lobby"]

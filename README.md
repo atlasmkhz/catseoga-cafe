@@ -4,8 +4,9 @@
 브라우저에서 바로 열리는 3D 공간으로, 닉네임만 정하면 들어가 다른 손님들과 말없이 함께 머물 수 있습니다.
 
 - Three.js 3D (폰 · PC), 설치 · 가입 없음
-- PeerJS(WebRTC) P2P 동시 접속: 서버비 0원 (GitHub Pages + PeerJS 무료 중계)
-- 카페 고양이 5마리(치즈 · 삼색이 · 고등어 · 턱시도 · 까망)가 알아서 캣타워를 오르내리고, 숨숨집에서 자고, 식빵 굽고, 기지개 켜고, 손님 곁에 와서 앉습니다
+- 동시 접속: Cloudflare 방 서버 (방 하나 50명, 방 개수는 설정으로 늘림). 서버 주소가 없으면 PeerJS P2P로 동작
+- 실내 카페(카페 테이블 · 창가 바 · 라운지 소파 · 좌식 · 주문 카운터) + 문을 열고 나가는 정원(데크 · 파라솔 · 큰 나무 그네 · 연못 · 새 모이대 · 등불)
+- 카페 고양이 5마리(치즈 · 삼색이 · 고등어 · 턱시도 · 까망)가 알아서 캣타워를 오르내리고, 숨숨집에서 자고, 식빵 굽고, 기지개 켜고, 정원에 나가 새를 구경하고, 손님 곁에 와서 앉습니다
 - 고양이를 누르면 쓰다듬기(하트 + 골골송), 간식 주기
 - 가구를 누르면 제품 카드 + "이 캣타워 보러 가기"
 - 낮/밤, 빗소리 · 장작 소리 · 골골송(Web Audio)
@@ -47,13 +48,17 @@ index.html            화면 틀
 css/style.css         화면 위 UI
 js/config.js          ★ 설정 (제품 주소 · GLB · 고양이)
 js/main.js            시작 · 카메라 · 낮밤 · 손님 · 동기화
-js/room.js            카페 방 (벽 · 창 · 서가 · 소파 · 찻상 · 난로 · 카운터)
+js/room.js            카페 실내 (벽 · 창 · 서가 · 테이블 · 바 · 소파 · 좌식 · 난로 · 카운터 · 정원 문)
+js/garden.js          정원 (데크 · 파라솔 · 나무 그네 · 연못 · 화단 · 새 모이대 · 등불 · 비)
+js/netServer.js       Cloudflare 방 서버 연결
+server/               Cloudflare Workers + Durable Objects 방 서버
+audio/                배경 음악 (bgm-day.mp3, bgm-night.mp3)
 js/furniture.js       오르미캣타워 · 커스텀B 월캣타워 + GLB 교체
 js/catModel.js        고양이 모델 · 무늬 · 자세
 js/cats.js            고양이 행동 (방장 컴퓨터가 계산해 나눠 줌)
 js/myCat.js           2단계: 사진 털색 추출 + 따라다니는 내 고양이
 js/avatar.js          손님 캐릭터
-js/net.js             PeerJS P2P (방장 자동 교체)
+js/net.js             PeerJS P2P (서버 없을 때, 방장 자동 교체)
 js/audio.js           빗소리 · 장작 · 골골송 · 야옹
 js/controls.js        톡 · 끌기 · 꾹 누르기 · 두 손가락 · 키보드
 js/fx.js js/nav.js js/kit.js js/ui.js   효과 · 이동 · 재료 · UI
@@ -61,7 +66,22 @@ vendor/               three.js r160, PeerJS 1.5.4 (CDN 없이 동작)
 models/               GLB 넣는 곳
 ```
 
-## 동시 접속 방식
+## 방 서버 (Cloudflare) 처음 한 번 설정
+
+1. Cloudflare 대시보드 → My Profile → API Tokens → Create Token → **Edit Cloudflare Workers** 템플릿으로 토큰 만들기
+2. Cloudflare 대시보드 Workers 화면에서 **Account ID** 복사
+3. GitHub 레포 → Settings → Secrets and variables → Actions → New repository secret
+   - `CLOUDFLARE_API_TOKEN` = 1번 토큰
+   - `CLOUDFLARE_ACCOUNT_ID` = 2번 ID
+4. GitHub 레포 → Actions → **Deploy cafe server** → Run workflow
+
+그러면 서버가 올라가고, 서버 주소가 `js/config.js` 의 `serverUrl` 에 자동으로 적힙니다.
+이후 `server/` 를 고쳐 main 에 올리면 자동으로 다시 배포됩니다.
+
+- 방 인원: `server/wrangler.toml` 의 `ROOM_CAP` (기본 50)
+- 방 개수: `server/wrangler.toml` 의 `MAX_ROOMS` (기본 20 → 100으로 바꾸면 최대 5,000명)
+
+## 동시 접속 방식 (서버 없이 쓸 때)
 
 첫 손님이 방장(호스트)이 되고, 다음 손님들은 방장에게 연결합니다(별 모양).
 고양이 움직임은 방장 컴퓨터가 계산해 모두에게 나눠 주므로 모두 같은 고양이를 봅니다.

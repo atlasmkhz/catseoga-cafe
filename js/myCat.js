@@ -2,7 +2,8 @@
 // 사진에서 털색을 뽑아(k-평균) 무늬를 정하고, 주인 곁을 따라다니는 고양이를 만듭니다.
 import * as THREE from 'three';
 import { CatModel, ANIMS } from './catModel.js';
-import { pushOut } from './nav.js';
+import { pushOut, isOutdoor } from './nav.js';
+import { DOOR } from './room.js';
 
 // ---------- 사진 → 털색 ----------
 export async function extractCatColors(file) {
@@ -120,8 +121,14 @@ export class FollowerCat {
   simulate(dt, owner, ownerYaw) {
     if (!this.placed) { this.pos.copy(owner).add(new THREE.Vector3(0.6, 0, 0.3)).setY(0); pushOut(this.room, this.pos, 0.14); this.placed = true; }
     const side = new THREE.Vector3(Math.cos(ownerYaw) * 0.55, 0, -Math.sin(ownerYaw) * 0.55);
-    const want = owner.clone().setY(0).add(side).add(new THREE.Vector3(Math.sin(ownerYaw) * 0.15, 0, Math.cos(ownerYaw) * 0.15));
+    let want = owner.clone().setY(0).add(side).add(new THREE.Vector3(Math.sin(ownerYaw) * 0.15, 0, Math.cos(ownerYaw) * 0.15));
     pushOut(this.room, want, 0.14);
+    // 주인이 문 건너편에 있으면 문을 거쳐 따라감
+    if (isOutdoor(this.pos) !== isOutdoor(owner)) {
+      const here = isOutdoor(this.pos) ? DOOR.outside : DOOR.inside;
+      const there = isOutdoor(this.pos) ? DOOR.inside : DOOR.outside;
+      want = Math.hypot(this.pos.x - here.x, this.pos.z - here.z) < 0.35 ? there.clone() : here.clone();
+    }
     const d = want.sub(this.pos); d.y = 0;
     const dist = d.length();
     let speed = 0;

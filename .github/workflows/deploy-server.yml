@@ -1,0 +1,52 @@
+# 카페 방 서버를 Cloudflare에 올리고, 사이트 설정(js/config.js)에 서버 주소를 자동으로 적어 넣습니다.
+# 필요한 것 (GitHub 레포 → Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN  : Cloudflare "Edit Cloudflare Workers" 템플릿으로 만든 API 토큰
+#   CLOUDFLARE_ACCOUNT_ID : Cloudflare 대시보드의 Account ID
+name: Deploy cafe server
+
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/deploy-server.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Deploy to Cloudflare
+        id: wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server
+
+      - name: Write server URL into site config
+        env:
+          URL: ${{ steps.wrangler.outputs.deployment-url }}
+        run: |
+          echo "Server URL: $URL"
+          if [ -z "$URL" ]; then echo "배포 주소를 찾지 못했어요. 위 로그의 workers.dev 주소를 js/config.js 에 직접 넣어 주세요."; exit 0; fi
+          sed -E -i "s#(get\('server'\) \|\| )'[^']*'#\1'${URL}'#" js/config.js
+          grep -n "serverUrl" js/config.js
+          if git diff --quiet; then echo "이미 최신 주소예요"; else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Set cafe server URL"
+            git push origin HEAD:main
+          fi
+          # GitHub Pages가 gh-pages 브랜치를 보고 있으면 같이 맞춰 줌
+          git push -f origin HEAD:gh-pages || true

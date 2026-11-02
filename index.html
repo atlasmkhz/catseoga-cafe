@@ -28,7 +28,7 @@
   <div id="entry">
     <form id="enterForm" class="panel" autocomplete="off">
       <div class="logo">고양이서가 <span>카페</span></div>
-      <p class="sub">원목 캣타워 사이로 고양이들이 오가는 작은 방.<br />말없이 머물다 가셔도 괜찮아요.</p>
+      <p class="sub">원목 캣타워 사이로 고양이들이 오가는 카페와 작은 정원.<br />말없이 머물다 가셔도 괜찮아요.</p>
       <label class="field">
         <span>닉네임</span>
         <input id="nameInput" maxlength="12" placeholder="카페에서 쓸 이름" enterkeyhint="go" />
@@ -36,7 +36,10 @@
       <div class="field"><span>옷</span><div id="topSwatches" class="swatches"></div></div>
       <div class="field"><span>머리</span><div id="hairSwatches" class="swatches"></div></div>
       <div class="field"><span>피부</span><div id="skinSwatches" class="swatches"></div></div>
-      <label class="check"><input type="checkbox" id="soundOnEnter" checked /> 빗소리 · 장작 소리와 함께</label>
+      <div class="field hidden" id="roomField"><span>방</span>
+        <select id="roomSelect"><option value="">빈자리 있는 방으로</option></select>
+      </div>
+      <label class="check"><input type="checkbox" id="soundOnEnter" checked /> 음악 · 자연 소리와 함께</label>
       <button class="btn primary big" type="submit">카페 들어가기</button>
       <p class="tiny">가입 없이 닉네임만 · 같은 시간에 온 손님들과 함께 보여요</p>
     </form>
@@ -45,10 +48,11 @@
   <!-- 화면 위 UI -->
   <div id="hud" class="hidden">
     <div class="topbar">
-      <div class="chip brand"><b>고양이서가</b><i id="statusDot" class="dot"></i><span id="count">혼자 머무는 중</span></div>
+      <div class="chip brand"><b>고양이서가</b><em id="roomNo"></em><i id="statusDot" class="dot"></i><span id="count">혼자 머무는 중</span></div>
       <div class="buttons">
         <button id="btnMyCat" class="round" title="우리 집 고양이 입장시키기" type="button">🐾</button>
         <button id="btnWave" class="round" title="손 흔들기" type="button">👋</button>
+        <button id="btnRain" class="round off" title="비 오는 날" type="button">☔</button>
         <button id="btnNight" class="round" title="낮 · 밤" type="button">☀️</button>
         <button id="btnSound" class="round off" title="소리 켜기" type="button">🔈</button>
       </div>
@@ -59,6 +63,7 @@
       <div id="cardBody"></div>
     </div>
     <div id="toast" class="toast"></div>
+    <button id="petBubble" class="pet-bubble" type="button">🤚 <span>쓰다듬기</span></button>
   </div>
 
   <!-- 우리 집 고양이 입장시키기 -->

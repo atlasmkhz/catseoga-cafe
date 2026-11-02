@@ -2,14 +2,16 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { IS_MOBILE } from './kit.js';
-import { buildRoom, ROOM } from './room.js';
+import { buildRoom, ROOM, WORLD, DOOR } from './room.js';
+import { buildGarden } from './garden.js';
 import { CatCafe } from './cats.js';
 import { Avatar, LOOKS } from './avatar.js';
 import { FX } from './fx.js';
 import { Sound } from './audio.js';
 import { Net } from './net.js';
+import { NetServer, fetchRooms } from './netServer.js';
 import { Controls } from './controls.js';
-import { pushOut } from './nav.js';
+import { pushOut, route, isOutdoor } from './nav.js';
 import { extractCatColors, FollowerCat } from './myCat.js';
 import { UI } from './ui.js';
 
@@ -45,7 +47,8 @@ sun.target.position.set(0, 0, 0);
 sun.castShadow = true;
 const SM = IS_MOBILE ? 1024 : 2048;
 sun.shadow.mapSize.set(SM, SM);
-Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 2, far: 35 });
+Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 2, far: 40 });
+const SUN_OFFSET = new THREE.Vector3(-3.6, 10.5, -12);
 sun.shadow.bias = -0.0006;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
@@ -55,6 +58,7 @@ fill.position.set(4, 8, 10);
 scene.add(fill);
 
 const room = buildRoom(scene);
+buildGarden(scene, room);
 const fx = new FX(scene);
 const sound = new Sound();
 const cafe = new CatCafe(scene, room, fx, sound);
@@ -67,8 +71,9 @@ const me = {
   name: store.get('name', ''),
   look: store.get('look', { top: LOOKS.tops[Math.floor(Math.random() * LOOKS.tops.length)], hair: LOOKS.hairs[0], skin: LOOKS.skins[0] }),
   avatar: null,
-  pos: new THREE.Vector3(2.45, 0, 4.2),
+  pos: room.spawn.clone(),
   yaw: Math.PI,
+  route: [],
   target: null,
   seat: null,
   pending: null,
@@ -86,7 +91,7 @@ const cam = { yaw: 0.28, pitch: 0.72, dist: 15, target: new THREE.Vector3(0, 0.6
 function fitDist() {
   const a = camera.aspect;
   // 세로 화면(폰)은 조금 더 넓게 보고, 내 캐릭터를 더 가까이 따라감
-  return a < 1 ? 13 / Math.max(0.62, a * 1.2) : 14.5;
+  return a < 1 ? 10 / Math.max(0.6, a * 1.2) : 11.5;
 }
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -94,20 +99,18 @@ function resize() {
   camera.aspect = w / h;
   camera.fov = camera.aspect < 1 ? 44 : 36;
   camera.updateProjectionMatrix();
-  cam.maxDist = fitDist() * 1.25;
+  cam.maxDist = fitDist() * 1.7;
   if (!cam.userZoomed) cam.dist = fitDist();
 }
 window.addEventListener('resize', resize);
 resize();
 
 function updateCamera(dt) {
-  // 내 캐릭터를 따라가되 방 안쪽 범위에서만 (디오라마가 한눈에 보이게)
-  const want = me.entered ? me.pos.clone() : new THREE.Vector3(0, 0, 0);
-  const portrait = camera.aspect < 1;
-  const k = portrait ? 0.9 : 0.55;
-  want.x = THREE.MathUtils.clamp(want.x * k, portrait ? -4.6 : -3, portrait ? 4.6 : 3);
-  want.z = THREE.MathUtils.clamp(want.z * k, -2.6, 2.6);
-  want.y = 0.6;
+  // 내 캐릭터를 따라감 (판 가장자리에선 덜 따라감)
+  const want = me.entered ? me.pos.clone() : new THREE.Vector3(-1, 0, 0);
+  want.x = THREE.MathUtils.clamp(want.x, WORLD.minX + 2.5, WORLD.maxX - 2.5);
+  want.z = THREE.MathUtils.clamp(want.z * 0.7, -2.6, 2.6);
+  want.y = 0.5;
   cam.target.lerp(want, 1 - Math.exp(-2.5 * dt));
   if (!me.entered) cam.yaw += dt * 0.05;
   const cp = Math.cos(cam.pitch);
@@ -121,10 +124,13 @@ function updateCamera(dt) {
 
 // ---------- 벽 잘라 보기 (카메라 쪽 벽은 투명하게) ----------
 function updateWalls(dt) {
-  const c = new THREE.Vector3(camera.position.x, 0, camera.position.z);
+  // 카메라와 내 캐릭터 사이를 가로막는 벽은 내려감
+  const c = camera.position;
+  const ref = me.entered ? me.pos : cam.target;
   for (const w of room.walls) {
-    const d = c.dot(w.normal) - (Math.abs(w.normal.x) ? ROOM.maxX : ROOM.maxZ);
-    const want = d > 0.5 ? 0 : 1;
+    const sc = (Math.abs(w.normal.x) ? c.x : c.z) * (w.normal.x + w.normal.z) - w.at * (w.normal.x + w.normal.z);
+    const sp = (Math.abs(w.normal.x) ? ref.x : ref.z) * (w.normal.x + w.normal.z) - w.at * (w.normal.x + w.normal.z);
+    const want = (sc > 0.3 && sp < 0.1) || (sc < -0.3 && sp > 0.1) ? 0 : 1;
     w.opacity += (want - w.opacity) * (1 - Math.exp(-8 * dt));
     if (Math.abs(w.opacity - want) < 0.01) w.opacity = want;
     const op = w.opacity;
@@ -134,6 +140,21 @@ function updateWalls(dt) {
     w.group.visible = op > 0.02;
     w.group.userData.fade = e;
   }
+}
+
+// 창밖 풍경은 실내에 있을 때만, 정원 문은 누가 다가가면 열림
+const doorCenter = new THREE.Vector3(ROOM.maxX + 0.1, 0, 0);
+function updateWorld(dt) {
+  const out = me.entered && isOutdoor(me.pos);
+  if (room.outsideView) room.outsideView.visible = !out;
+  let near = false;
+  const close = (p) => Math.hypot(p.x - doorCenter.x, p.z - doorCenter.z) < 1.5;
+  if (me.entered && close(me.pos)) near = true;
+  for (const r of remotes.values()) if (close(r.pos)) near = true;
+  for (const c of cafe.cats) if (close(c.pos)) near = true;
+  if (me.myCat && close(me.myCat.pos)) near = true;
+  room.gardenDoor.update(dt, near);
+  sound.setOutdoor(out);
 }
 
 // ---------- 낮 · 밤 ----------
@@ -166,7 +187,9 @@ cafe.getGuests = () => {
 // ---------- 앉기 · 걷기 ----------
 function seatApproach(seat) {
   const f = new THREE.Vector3(Math.sin(seat.rotY), 0, Math.cos(seat.rotY));
-  const p = seat.pos.clone().setY(0).addScaledVector(f, seat.floor ? 0.45 : 0.5);
+  // 소파 · 벤치는 앞에서, 의자 · 바 의자 · 방석은 뒤(테이블 반대쪽)에서 다가감
+  const back = seat.stool || seat.side || seat.floor;
+  const p = seat.pos.clone().setY(0).addScaledVector(f, back ? -0.55 : 0.5);
   return pushOut(room, p, 0.22);
 }
 function standUp() {
@@ -177,7 +200,10 @@ function standUp() {
 }
 function walkTo(p, pending = null) {
   standUp();
-  me.target = pushOut(room, p.clone().setY(0), 0.24);
+  const goal = pushOut(room, p.clone().setY(0), 0.24);
+  const wps = route(me.pos, goal);
+  me.target = wps.shift();
+  me.route = wps;
   me.pending = pending;
 }
 function seatTakenByOther(seat) {
@@ -194,7 +220,7 @@ function updateMe(dt) {
   let moving = false;
   if (ax || ay) {
     standUp();
-    me.target = null; me.pending = null;
+    me.target = null; me.pending = null; me.route = [];
     const fwd = new THREE.Vector3(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));
     const right = new THREE.Vector3(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw));
     const dir = fwd.multiplyScalar(ay).add(right.multiplyScalar(ax)).normalize();
@@ -213,9 +239,9 @@ function updateMe(dt) {
   } else if (me.target) {
     const d = me.target.clone().sub(me.pos).setY(0);
     const dist = d.length();
-    if (dist < 0.06) {
-      me.target = null;
-      arrive();
+    if (dist < 0.06 || (me.route.length && dist < 0.3)) {
+      me.target = me.route.shift() || null;
+      if (!me.target) arrive();
     } else {
       d.normalize();
       const step = Math.min(dist, 1.8 * dt);
@@ -226,7 +252,7 @@ function updateMe(dt) {
       pushOut(room, me.pos, 0.24);
       // 막혀서 못 가면 멈춤
       me.stuck = before.distanceTo(me.pos) < step * 0.2 ? (me.stuck || 0) + dt : 0;
-      if (me.stuck > 0.4) { me.target = null; me.stuck = 0; arrive(); }
+      if (me.stuck > 0.4) { me.target = null; me.route = []; me.stuck = 0; arrive(); }
     }
   }
   if (!me.seat) pushOut(room, me.pos, 0.24);
@@ -273,6 +299,16 @@ function pick(x, y) {
   // 1) 고양이
   const catHits = raycaster.intersectObjects([...cafe.hitObjects(), ...followerHits()], false);
   if (catHits.length) return { kind: 'cat', obj: catHits[0].object, point: catHits[0].point };
+  // 살짝 빗나가도 화면에서 가까운 고양이를 잡아 줌 (손가락 크기 정도)
+  const tol = IS_MOBILE ? 46 : 32;
+  let best = null, bd = tol;
+  for (const h of [...cafe.hitObjects(), ...followerHits()]) {
+    const v = h.getWorldPosition(new THREE.Vector3()).project(camera);
+    if (v.z > 1) continue;
+    const d = Math.hypot((v.x + 1) / 2 * window.innerWidth - x, (1 - v.y) / 2 * window.innerHeight - y);
+    if (d < bd) { bd = d; best = h; }
+  }
+  if (best) return { kind: 'cat', obj: best, point: best.getWorldPosition(new THREE.Vector3()) };
   // 2) 장면 전체
   const hits = raycaster.intersectObjects(scene.children, true).filter((h) => usable(h.object));
   if (!hits.length) return null;
@@ -390,11 +426,18 @@ function floorAt(x, y) {
 }
 
 // ---------- 네트워크 ----------
-const net = new Net(uid, {
+// config.js 에 serverUrl 이 있으면 Cloudflare 방 서버(방마다 50명), 없으면 PeerJS P2P
+const SERVER = !!CONFIG.serverUrl;
+const netHandlers = {
   onHost: (host) => {
     if (host && !cafe.isHost) cafe.adopt();
     cafe.isHost = host;
   },
+  onFull: () => {
+    ui.toast('이 방이 가득 찼어요. 다른 방을 골라 주세요');
+    ui.reopenEntry();
+  },
+  hello: () => helloMsg(),
   onHostLost: () => { /* 방장이 나가면 잠시 고양이를 마지막 위치에 둠 */ },
   onStatus: (s) => ui.setStatus(s),
   onClientOpen: (send) => {
@@ -403,7 +446,9 @@ const net = new Net(uid, {
   },
   onConnected: () => { net.send(helloMsg()); sendState(true); },
   onMessage: (m) => handle(m),
-});
+};
+// 서버 모드에선 서버가 방장(고양이 계산 담당)을 정해 줌. 처음엔 혼자라고 보고 내가 계산
+const net = SERVER ? new NetServer(uid, netHandlers) : new Net(uid, netHandlers);
 
 function helloMsg() {
   return { t: 'hi', n: me.name, l: me.look, mc: me.myCatInfo ? { ...me.myCatInfo, swatches: undefined } : null, uid };
@@ -416,7 +461,7 @@ function sendState(force = false) {
   const c = me.myCat ? me.myCat.state() : null;
   const key = JSON.stringify([st, seatIdx, c]);
   const now = performance.now();
-  if (!force && key === lastSent && now - lastSentT < 2000) return;
+  if (!force && key === lastSent && (SERVER || now - lastSentT < 2000)) return;
   lastSent = key; lastSentT = now;
   net.send({ t: 'st', p: st, s: seatIdx, c });
 }
@@ -526,20 +571,41 @@ function updateRemotes(dt) {
 }
 
 // ---------- 화면 UI 연결 ----------
-ui.onEnter = ({ name, look, soundOn }) => {
+ui.onEnter = async ({ name, look, soundOn, room: roomChoice }) => {
   me.name = name; me.look = look;
   store.set('name', name); store.set('look', look);
+  if (me.avatar) scene.remove(me.avatar.root);
   me.avatar = new Avatar(name, look);
   scene.add(me.avatar.root);
   me.entered = true;
   if (soundOn) { sound.setEnabled(true); sound.setNight(dayNight.target); ui.setSound(true); }
-  if (me.myCatInfo) spawnMyCat(me.myCatInfo, false);
-  net.start();
+  if (me.myCatInfo && !me.myCat) spawnMyCat(me.myCatInfo, false);
+  if (SERVER) {
+    let n = roomChoice;
+    if (!n) {
+      try { const info = await fetchRooms(); n = info.best || 1; } catch { n = 1; }
+    }
+    me.roomNo = n;
+    ui.setRoom(n);
+    net.stopped = false;
+    net.start(n);
+  } else {
+    net.start();
+  }
   ui.showHint(IS_MOBILE
     ? ['톡 누르면 걸어가요', '끌어서 둘러보고, 두 손가락으로 크게 · 작게', '고양이를 눌러 쓰다듬어 보세요']
     : ['바닥을 누르면 걸어가요 (WASD도 돼요)', '끌어서 둘러보기 · 휠로 크게 · 작게', '고양이를 눌러 쓰다듬어 보세요']);
-  walkTo(new THREE.Vector3(2.0, 0, 3.0));
+  walkTo(new THREE.Vector3(-1.4, 0, 3.4));
 };
+ui.loadRooms = SERVER ? fetchRooms : null;
+ui.onToggleRain = () => {
+  room.rainOn = !room.rainOn;
+  cafe.rain = room.rainOn;
+  sound.setRain(room.rainOn);
+  store.set('rain', room.rainOn);
+  return room.rainOn;
+};
+cafe.birdsPresent = () => room.birdsPresent?.();
 ui.onToggleNight = () => {
   dayNight.target = dayNight.target > 0.5 ? 0 : 1;
   sound.setNight(dayNight.target);
@@ -574,7 +640,27 @@ function spawnMyCat(info, announce) {
     setTimeout(() => fx.hearts(me.myCat.model.headWorld(), 4), 600);
   }
 }
-ui.init({ name: me.name, look: me.look, night: dayNight.target > 0.5 });
+ui.init({ name: me.name, look: me.look, night: dayNight.target > 0.5, server: SERVER, rain: store.get('rain', false) });
+room.rainOn = cafe.rain = store.get('rain', false);
+sound.setRain(room.rainOn);
+
+// ---------- 가까이 있는 고양이 위에 「쓰다듬기」 ----------
+const tmpV = new THREE.Vector3();
+function updatePetBubble() {
+  if (!me.entered) { ui.petBubble(null); return; }
+  let best = null, bd = 1.7;
+  for (const c of cafe.cats) {
+    const d = Math.hypot(c.pos.x - me.pos.x, c.pos.z - me.pos.z);
+    if (d < bd) { bd = d; best = c; }
+  }
+  if (!best) { ui.petBubble(null); return; }
+  best.model.headWorld(tmpV);
+  tmpV.y += 0.28;
+  tmpV.project(camera);
+  if (tmpV.z > 1) { ui.petBubble(null); return; }
+  ui.petBubble({ id: best.def.id, name: best.def.name, x: (tmpV.x + 1) / 2 * window.innerWidth, y: (1 - tmpV.y) / 2 * window.innerHeight });
+}
+ui.onPetBubble = (id) => petCat(id);
 
 // 창을 닫으면 인사
 window.addEventListener('pagehide', () => { try { net.send({ t: 'bye' }); } catch { /* 무시 */ } });
@@ -584,8 +670,8 @@ let tick = 0;
 setInterval(() => {
   tick++;
   sendState();
-  if (cafe.isHost && net.isHost && net.conns.size && tick % 2 === 0) net.send({ t: 'cats', c: cafe.snapshot() });
-  if (tick % 25 === 0 && me.entered) net.send(helloMsg());
+  if (cafe.isHost && net.isHost && remotes.size && tick % 2 === 0) net.send({ t: 'cats', c: cafe.snapshot() });
+  if (!SERVER && tick % 25 === 0 && me.entered) net.send(helloMsg());
 }, 120);
 
 // ---------- 그리기 반복 ----------
@@ -605,7 +691,11 @@ function frame() {
   } else rippleMesh.material.opacity = 0;
   updateCamera(dt);
   updateWalls(dt);
-  // 이름표는 화면 쪽을 보게(스프라이트라 자동), 작은 기울기 보정
+  updateWorld(dt);
+  updatePetBubble();
+  // 그림자는 카메라가 보는 곳을 따라감
+  sun.target.position.set(cam.target.x, 0, cam.target.z);
+  sun.position.copy(sun.target.position).add(SUN_OFFSET);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
